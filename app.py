@@ -2,34 +2,42 @@ import streamlit as st
 import openai
 import docx
 import pdfplumber
-from fpdf import FPDF
 import tempfile
 import os
-
-# ======= Functie om niet-latin1-tekens te filteren ========
-def make_latin1(text):
-    return text.encode('latin-1', 'ignore').decode('latin-1')
 
 # ======= OpenAI API-key uit Streamlit secrets =========
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# ======= NIEUWE krachtige promptfunctie =========
+# ======= Krachtige prompt met samenvatting & rode draad + alleen fouten =======
 def maak_prompt(tekst):
     return f"""
-Je bent een ervaren redacteur. Analyseer de onderstaande tekst volgens deze structuur:
+Je bent een ervaren taalkundige en redacteur. Analyseer de onderstaande tekst op de volgende manier:
 
-1. Samenvatting (max 300 woorden)
-2. Rode draad & structuur (logische opbouw, samenhang inleiding, kern, conclusie)
-3. Taalgebruik, spelling en grammatica
-4. Bronvermelding en literatuurlijst (benoem expliciet of deze aanwezig en correct is)
-5. Tips voor verbetering
+1. Geef een korte samenvatting van de inhoud (maximaal 300 woorden).
+2. Geef een beoordeling van de rode draad en logische opbouw (maximaal 200 woorden).
+3. Geef daarna **uitsluitend** per alinea de zinnen die grammaticaal of taalkundig onjuist zijn.
+   - Voor elke fout:
+     1. De originele zin
+     2. De verbeterde versie
+     3. Een korte uitleg (maximaal 1 zin) waarom het fout is
 
-Let op:
-- Is de tekst langer dan 1500 woorden, SPLITS de tekst dan automatisch in logische delen (bijvoorbeeld per hoofdstuk, of maximaal per 1000 woorden per blok). Geef voor elk deel dezelfde feedback (1-5) en, als het kan, een korte per-alinea analyse. Plaats de feedback van alle delen onder elkaar, met duidelijke koppen als "Deel 1", "Deel 2", enzovoort.
-- Geef geen per-alinea feedback als er meer dan 20 alinea’s per blok zijn; vat dan de belangrijkste punten samen.
-- Behandel alle gevraagde onderdelen. Sla geen enkele sectie over.
-- Schrijf in helder, zakelijk en begrijpelijk Nederlands (of in het Engels als de input Engels is).
-- Gebruik duidelijke headings (met # voor kopjes), witregels tussen de onderdelen en bullets (-) waar nuttig.
+Vermeld geen alinea’s waar geen fouten in staan.  
+Schrijf alleen in het Nederlands (of in het Engels als de input Engels is).
+
+**Structuur van de feedback:**
+
+# Samenvatting
+
+# Rode draad & structuur
+
+# Fouten per alinea
+
+Alinea X:
+- Originele zin: ...
+- Verbeterde zin: ...
+- Uitleg: ...
+
+(herhaal dit voor alle foute zinnen in deze alinea)
 
 Hier is de tekst:
 \"\"\"
@@ -51,57 +59,41 @@ def extract_text_from_pdf(file):
                 text += page_text + "\n\n"
     return text
 
-# ======= Markdown-achtige PDF-generator =======
-class FeedbackPDF(FPDF):
-    def header(self):
-        pass
-
-    def chapter_title(self, txt, level=1):
-        if level == 1:
-            self.set_font('Arial', 'B', 16)
-            self.cell(0, 12, txt, ln=True)
-        elif level == 2:
-            self.set_font('Arial', 'B', 13)
-            self.cell(0, 10, txt, ln=True)
-        self.ln(2)
-
-    def bullet(self, txt):
-        self.set_font('Arial', '', 12)
-        self.cell(10)
-        self.cell(0, 10, f'- {txt}', ln=True)
-
-    def paragraph(self, txt):
-        self.set_font('Arial', '', 12)
-        self.multi_cell(0, 8, txt)
-        self.ln(1)
-
-def maak_feedback_pdf(feedback):
-    pdf = FeedbackPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    feedback = make_latin1(feedback)
+# ======= Word-generator voor feedback =======
+def maak_feedback_docx(feedback):
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+    doc = docx.Document()
+    doc.add_heading("AI Feedback – Samenvatting & Taalcontrole", 0)
+    section = None
     for line in feedback.split('\n'):
         line = line.strip()
         if not line:
-            pdf.ln(3)
             continue
-        if line.startswith("### "):
-            pdf.chapter_title(line.replace("### ", ""), level=2)
-        elif line.startswith("## "):
-            pdf.chapter_title(line.replace("## ", ""), level=2)
-        elif line.startswith("# "):
-            pdf.chapter_title(line.replace("# ", ""), level=1)
-        elif line.startswith("- "):
-            pdf.bullet(line[2:])
-        else:
-            pdf.paragraph(line)
-    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    pdf.output(temp.name)
+        if line.lower().startswith("# samenvatting"):
+            section = "Samenvatting"
+            doc.add_heading("Samenvatting", level=1)
+        elif line.lower().startswith("# rode draad"):
+            section = "Rode draad & structuur"
+            doc.add_heading("Rode draad & structuur", level=1)
+        elif line.lower().startswith("# fouten per alinea"):
+            section = "Fouten"
+            doc.add_heading("Fouten per alinea", level=1)
+        elif line.lower().startswith("alinea"):
+            doc.add_heading(line, level=2)
+        elif line.startswith("- Originele zin:"):
+            doc.add_paragraph(line, style="List Bullet")
+        elif line.startswith("- Verbeterde zin:"):
+            doc.add_paragraph(line, style="List Bullet")
+        elif line.startswith("- Uitleg:"):
+            doc.add_paragraph(line, style="List Bullet")
+        elif section:
+            doc.add_paragraph(line)
+    doc.save(temp.name)
     return temp.name
 
 # ======= Streamlit interface =======
-st.title("Verslagcoach – Uploadportaal (AI-feedback)")
-st.write("Upload je verslag (.docx of .pdf). Je ontvangt direct AI-feedback als overzichtelijke PDF met duidelijke kopjes.")
+st.title("Verslagcoach – Samenvatting & Taalcontrole")
+st.write("Upload je verslag (.docx of .pdf). Je ontvangt AI-feedback als Word-bestand: eerst een samenvatting en rode draad, daarna alleen zinnen met fouten per alinea.")
 
 email = st.text_input("Vul je e-mailadres in (optioneel):")
 type_check = st.selectbox(
@@ -118,7 +110,7 @@ if st.button("Verzenden"):
     if not file:
         st.error("Upload een bestand!")
     else:
-        with st.spinner("Verslag verwerken en AI-feedback genereren..."):
+        with st.spinner("Verslag wordt verwerkt en AI-feedback gegenereerd..."):
             try:
                 if file.name.endswith(".docx"):
                     verslag_tekst = extract_text_from_docx(file)
@@ -134,7 +126,7 @@ if st.button("Verzenden"):
             if not verslag_tekst or len(verslag_tekst.strip()) < 50:
                 st.error("Kon geen bruikbare tekst vinden in het bestand. Probeer een ander document.")
             else:
-                prompt = maak_prompt(verslag_tekst[:12000])  # Pas evt. limiet aan
+                prompt = maak_prompt(verslag_tekst[:8000])
                 try:
                     response = openai.chat.completions.create(
                         model="gpt-4o",
@@ -142,20 +134,19 @@ if st.button("Verzenden"):
                         temperature=0.2,
                     )
                     feedback = response.choices[0].message.content
-                    feedback = make_latin1(feedback)
 
-                    pdf_path = maak_feedback_pdf(feedback)
-                    with open(pdf_path, "rb") as f:
-                        st.success("Download hieronder je persoonlijke AI-feedback als PDF:")
+                    docx_path = maak_feedback_docx(feedback)
+                    with open(docx_path, "rb") as f:
+                        st.success("Download hieronder je persoonlijke AI-feedback als Word-bestand:")
                         st.download_button(
-                            label="Download feedback (PDF)",
+                            label="Download feedback (.docx)",
                             data=f.read(),
-                            file_name="AI-feedback-verslag.pdf",
-                            mime="application/pdf"
+                            file_name="AI-feedback-samenvatting-taalcontrole.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                         )
-                    os.remove(pdf_path)
+                    os.remove(docx_path)
 
-                    st.markdown("**Samenvatting van de feedback:**")
+                    st.markdown("**Korte impressie van de feedback:**")
                     st.write(feedback[:1000] + ("..." if len(feedback) > 1000 else ""))
 
                 except Exception as e:
