@@ -8,49 +8,48 @@ import os
 
 # ======= Functie om niet-latin1-tekens te filteren ========
 def make_latin1(text):
-    """Filter alle niet-latin1 tekens (zoals emoji's en sommige accenten) uit de tekst."""
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
 # ======= OpenAI API-key uit Streamlit secrets =========
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# ======= Prompt-functie ZONDER emoji's =========
+# ======= Prompt-functie MET layout-instructie =========
 def maak_prompt(tekst):
     return f"""
-Je bent een ervaren redacteur gespecialiseerd in het verbeteren van Nederlandstalige academische teksten op HBO-niveau.
+Je bent een ervaren redacteur. Analyseer de onderstaande tekst volgens deze structuur:
 
-Je krijgt een tekst met de opdracht om deze:
-1. Te corrigeren op grammatica en spelling
-2. Te herschrijven waar nodig voor betere zinsstructuur en stijl
-3. De structuur per alinea logischer en duidelijker te maken
+# Samenvatting (max 300 woorden)
 
-Houd je aan de volgende instructies:
-- Schrijf in helder, zakelijk en toegankelijk Nederlands (HBO-stijl, dus niet te formeel of wollig)
-- Verander niets aan de inhoud of betekenis
-- Maak geen onnodige herschrijvingen
-- Geef per alinea concreet aan wat je hebt aangepast en waarom
+# Rode draad & structuur
 
-Structuur van jouw output per alinea:
+# Taalgebruik, spelling en grammatica
 
-Alinea X:
-1. Verbeterde tekst:  
-    [Nieuwe versie van de alinea]
-2. Toelichting per wijziging:  
-    - [Oude zin] → [Nieuwe zin] — reden: [korte uitleg]
-    - ...
+# Bronvermelding
 
-(Voeg bij twijfel ook 1 alternatieve formulering toe)
+# Tips voor verbetering
 
-Als de tekst in het Engels is, geef dan Engelse feedback.
+# Per alinea
+Voor elke alinea: 
+## Alinea X
+Verbeterde tekst:
+...
+Toelichting:
+...
+
+**Geef de feedback in markdown-opmaak:**  
+- Gebruik duidelijke headings met # voor grote kopjes, ## voor subkopjes  
+- Gebruik witregels tussen de onderdelen  
+- Gebruik opsommingen (-) voor tips of opmerkingen  
+- Gebruik geen emoji’s of afbeeldingen
 
 Hier is de tekst die je moet verbeteren:
 
-\"\"\" 
+\"\"\"
 {tekst}
 \"\"\"
-    """
+"""
 
-# ======= Functies om tekst uit bestanden te halen =======
+# ======= Tekst extractie-functies =======
 def extract_text_from_docx(file):
     doc = docx.Document(file)
     return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
@@ -64,23 +63,57 @@ def extract_text_from_pdf(file):
                 text += page_text + "\n\n"
     return text
 
-# ======= PDF-generator =======
+# ======= Markdown-achtige PDF-generator =======
+class FeedbackPDF(FPDF):
+    def header(self):
+        pass
+
+    def chapter_title(self, txt, level=1):
+        if level == 1:
+            self.set_font('Arial', 'B', 16)
+            self.cell(0, 12, txt, ln=True)
+        elif level == 2:
+            self.set_font('Arial', 'B', 13)
+            self.cell(0, 10, txt, ln=True)
+        self.ln(2)
+
+    def bullet(self, txt):
+        self.set_font('Arial', '', 12)
+        self.cell(10)
+        self.cell(0, 10, f'- {txt}', ln=True)
+
+    def paragraph(self, txt):
+        self.set_font('Arial', '', 12)
+        self.multi_cell(0, 8, txt)
+        self.ln(1)
+
 def maak_feedback_pdf(feedback):
-    pdf = FPDF()
+    pdf = FeedbackPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_font("Arial", size=12)
-    # Filter niet-latin1-tekens
     feedback = make_latin1(feedback)
-    for line in feedback.split("\n"):
-        pdf.multi_cell(0, 10, line)
+    for line in feedback.split('\n'):
+        line = line.strip()
+        if not line:
+            pdf.ln(3)
+            continue
+        if line.startswith("### "):
+            pdf.chapter_title(line.replace("### ", ""), level=2)
+        elif line.startswith("## "):
+            pdf.chapter_title(line.replace("## ", ""), level=2)
+        elif line.startswith("# "):
+            pdf.chapter_title(line.replace("# ", ""), level=1)
+        elif line.startswith("- "):
+            pdf.bullet(line[2:])
+        else:
+            pdf.paragraph(line)
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf.output(temp.name)
     return temp.name
 
 # ======= Streamlit interface =======
 st.title("Verslagcoach – Uploadportaal (AI-feedback)")
-st.write("Upload je verslag (.docx of .pdf). Je ontvangt direct AI-feedback als downloadbare PDF.")
+st.write("Upload je verslag (.docx of .pdf). Je ontvangt direct AI-feedback als overzichtelijke PDF met duidelijke kopjes.")
 
 email = st.text_input("Vul je e-mailadres in (optioneel):")
 type_check = st.selectbox(
@@ -113,7 +146,7 @@ if st.button("Verzenden"):
             if not verslag_tekst or len(verslag_tekst.strip()) < 50:
                 st.error("Kon geen bruikbare tekst vinden in het bestand. Probeer een ander document.")
             else:
-                prompt = maak_prompt(verslag_tekst[:12000])  # tot 12.000 tekens
+                prompt = maak_prompt(verslag_tekst[:12000])
                 try:
                     response = openai.chat.completions.create(
                         model="gpt-4o",
@@ -121,11 +154,8 @@ if st.button("Verzenden"):
                         temperature=0.2,
                     )
                     feedback = response.choices[0].message.content
-
-                    # Filter niet-latin1-tekens (emoji’s e.d.) uit feedback
                     feedback = make_latin1(feedback)
 
-                    # PDF genereren
                     pdf_path = maak_feedback_pdf(feedback)
                     with open(pdf_path, "rb") as f:
                         st.success("Download hieronder je persoonlijke AI-feedback als PDF:")
@@ -137,10 +167,8 @@ if st.button("Verzenden"):
                         )
                     os.remove(pdf_path)
 
-                    # Toon een samenvatting van de feedback
                     st.markdown("**Samenvatting van de feedback:**")
                     st.write(feedback[:1000] + ("..." if len(feedback) > 1000 else ""))
 
                 except Exception as e:
                     st.error(f"Er ging iets mis met de AI-feedback: {e}")
-
