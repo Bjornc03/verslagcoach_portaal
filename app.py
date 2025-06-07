@@ -6,10 +6,15 @@ from fpdf import FPDF
 import tempfile
 import os
 
-# 1. OpenAI API-key ophalen
+# ======= Functie om niet-latin1-tekens te filteren ========
+def make_latin1(text):
+    """Filter alle niet-latin1 tekens (zoals emoji's en sommige accenten) uit de tekst."""
+    return text.encode('latin-1', 'ignore').decode('latin-1')
+
+# ======= OpenAI API-key uit Streamlit secrets =========
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# 2. Prompt (let op: deze is NL en gestructureerd)
+# ======= Prompt-functie ZONDER emoji's =========
 def maak_prompt(tekst):
     return f"""
 Je bent een ervaren redacteur gespecialiseerd in het verbeteren van Nederlandstalige academische teksten op HBO-niveau.
@@ -19,18 +24,18 @@ Je krijgt een tekst met de opdracht om deze:
 2. Te herschrijven waar nodig voor betere zinsstructuur en stijl
 3. De structuur per alinea logischer en duidelijker te maken
 
-📌 Houd je aan de volgende instructies:
-- ✍️ Schrijf in helder, zakelijk en toegankelijk Nederlands (HBO-stijl, dus niet te formeel of wollig)
-- ❌ Verander niets aan de inhoud of betekenis
-- 🛑 Maak geen onnodige herschrijvingen
-- ✅ Geef per alinea concreet aan wat je hebt aangepast en waarom
+Houd je aan de volgende instructies:
+- Schrijf in helder, zakelijk en toegankelijk Nederlands (HBO-stijl, dus niet te formeel of wollig)
+- Verander niets aan de inhoud of betekenis
+- Maak geen onnodige herschrijvingen
+- Geef per alinea concreet aan wat je hebt aangepast en waarom
 
-📄 Structuur van jouw output per alinea:
+Structuur van jouw output per alinea:
 
-**Alinea X:**
-1. 💬 **Verbeterde tekst**:  
+Alinea X:
+1. Verbeterde tekst:  
     [Nieuwe versie van de alinea]
-2. 📝 **Toelichting per wijziging**:  
+2. Toelichting per wijziging:  
     - [Oude zin] → [Nieuwe zin] — reden: [korte uitleg]
     - ...
 
@@ -45,7 +50,7 @@ Hier is de tekst die je moet verbeteren:
 \"\"\"
     """
 
-# 3. Functies om tekst uit bestanden te halen
+# ======= Functies om tekst uit bestanden te halen =======
 def extract_text_from_docx(file):
     doc = docx.Document(file)
     return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
@@ -54,22 +59,26 @@ def extract_text_from_pdf(file):
     text = ""
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
-            text += page.extract_text() + "\n\n"
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n\n"
     return text
 
-# 4. PDF-generator
+# ======= PDF-generator =======
 def maak_feedback_pdf(feedback):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("Arial", size=12)
+    # Filter niet-latin1-tekens
+    feedback = make_latin1(feedback)
     for line in feedback.split("\n"):
         pdf.multi_cell(0, 10, line)
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf.output(temp.name)
     return temp.name
 
-# 5. Streamlit interface
+# ======= Streamlit interface =======
 st.title("Verslagcoach – Uploadportaal (AI-feedback)")
 st.write("Upload je verslag (.docx of .pdf). Je ontvangt direct AI-feedback als downloadbare PDF.")
 
@@ -89,7 +98,6 @@ if st.button("Verzenden"):
         st.error("Upload een bestand!")
     else:
         with st.spinner("Verslag verwerken en AI-feedback genereren..."):
-            # Tekst uit bestand halen
             try:
                 if file.name.endswith(".docx"):
                     verslag_tekst = extract_text_from_docx(file)
@@ -105,8 +113,7 @@ if st.button("Verzenden"):
             if not verslag_tekst or len(verslag_tekst.strip()) < 50:
                 st.error("Kon geen bruikbare tekst vinden in het bestand. Probeer een ander document.")
             else:
-                # Prompt samenstellen en AI aanroepen
-                prompt = maak_prompt(verslag_tekst[:12000])  # tot 12.000 tekens (limiet)
+                prompt = maak_prompt(verslag_tekst[:12000])  # tot 12.000 tekens
                 try:
                     response = openai.chat.completions.create(
                         model="gpt-4o",
@@ -114,6 +121,9 @@ if st.button("Verzenden"):
                         temperature=0.2,
                     )
                     feedback = response.choices[0].message.content
+
+                    # Filter niet-latin1-tekens (emoji’s e.d.) uit feedback
+                    feedback = make_latin1(feedback)
 
                     # PDF genereren
                     pdf_path = maak_feedback_pdf(feedback)
@@ -127,7 +137,7 @@ if st.button("Verzenden"):
                         )
                     os.remove(pdf_path)
 
-                    # (Eventueel: toon ook kort samenvatting op scherm)
+                    # Toon een samenvatting van de feedback
                     st.markdown("**Samenvatting van de feedback:**")
                     st.write(feedback[:1000] + ("..." if len(feedback) > 1000 else ""))
 
