@@ -13,37 +13,25 @@ def make_latin1(text):
 # ======= OpenAI API-key uit Streamlit secrets =========
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# ======= Prompt-functie MET layout-instructie =========
+# ======= NIEUWE krachtige promptfunctie =========
 def maak_prompt(tekst):
     return f"""
 Je bent een ervaren redacteur. Analyseer de onderstaande tekst volgens deze structuur:
 
-# Samenvatting (max 300 woorden)
+1. Samenvatting (max 300 woorden)
+2. Rode draad & structuur (logische opbouw, samenhang inleiding, kern, conclusie)
+3. Taalgebruik, spelling en grammatica
+4. Bronvermelding en literatuurlijst (benoem expliciet of deze aanwezig en correct is)
+5. Tips voor verbetering
 
-# Rode draad & structuur
+Let op:
+- Is de tekst langer dan 1500 woorden, SPLITS de tekst dan automatisch in logische delen (bijvoorbeeld per hoofdstuk, of maximaal per 1000 woorden per blok). Geef voor elk deel dezelfde feedback (1-5) en, als het kan, een korte per-alinea analyse. Plaats de feedback van alle delen onder elkaar, met duidelijke koppen als "Deel 1", "Deel 2", enzovoort.
+- Geef geen per-alinea feedback als er meer dan 20 alinea’s per blok zijn; vat dan de belangrijkste punten samen.
+- Behandel alle gevraagde onderdelen. Sla geen enkele sectie over.
+- Schrijf in helder, zakelijk en begrijpelijk Nederlands (of in het Engels als de input Engels is).
+- Gebruik duidelijke headings (met # voor kopjes), witregels tussen de onderdelen en bullets (-) waar nuttig.
 
-# Taalgebruik, spelling en grammatica
-
-# Bronvermelding
-
-# Tips voor verbetering
-
-# Per alinea
-Voor elke alinea: 
-## Alinea X
-Verbeterde tekst:
-...
-Toelichting:
-...
-
-**Geef de feedback in markdown-opmaak:**  
-- Gebruik duidelijke headings met # voor grote kopjes, ## voor subkopjes  
-- Gebruik witregels tussen de onderdelen  
-- Gebruik opsommingen (-) voor tips of opmerkingen  
-- Gebruik geen emoji’s of afbeeldingen
-
-Hier is de tekst die je moet verbeteren:
-
+Hier is de tekst:
 \"\"\"
 {tekst}
 \"\"\"
@@ -146,7 +134,7 @@ if st.button("Verzenden"):
             if not verslag_tekst or len(verslag_tekst.strip()) < 50:
                 st.error("Kon geen bruikbare tekst vinden in het bestand. Probeer een ander document.")
             else:
-                prompt = maak_prompt(verslag_tekst[:12000])
+                prompt = maak_prompt(verslag_tekst[:12000])  # Pas evt. limiet aan
                 try:
                     response = openai.chat.completions.create(
                         model="gpt-4o",
