@@ -4,40 +4,36 @@ import docx
 import pdfplumber
 import tempfile
 import os
+import math
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# ----------- PROMPTS ------------------
-
-def prompt_samenvatting(tekst):
+def prompt_beoordeling(tekst):
     return f"""
 Je bent een ervaren HBO-taal- en scriptiebeoordelaar.
-Geef een **kritische beoordeling** (max 300 woorden) van de **schrijfkwaliteit van het hele verslag**: spelling, grammatica, consistentie, helderheid, opbouw, rode draad, argumentatie, bronvermelding. Benoem sterke en zwakke punten van het schrijfwerk en geef een kort eindoordeel. Vat NIET de inhoud samen.
-"""
+Geef GEEN inhoudelijke samenvatting, maar alleen een **kritische beoordeling** (max 300 woorden) over de **kwaliteit van het schrijven van het hele rapportdeel**: spelling, grammatica, consistentie, helderheid, opbouw, rode draad, argumentatie, bronvermelding. Benoem sterke en zwakke punten van het schrijfwerk en geef een kort eindoordeel. Vat NIET de inhoud samen.
 
-def prompt_segmentatie_taalcontrole(tekst):
-    return f"""
-Je bent een ervaren HBO-taal- en scriptiebeoordelaar.
+Daarna:
+- Rapporteer **alleen echte taalfouten of grammaticale/spelfouten**, géén stijlverbeteringen.
+- Voor iedere fout:
+  - Noteer het hoofdstuk/kopje zoals dat letterlijk in de tekst staat, of schrijf 'niet gevonden' als het ontbreekt.
+  - Noem de originele zin met fout.
+  - Geef de verbeterde zin.
+  - Korte uitleg (max 1 zin) waarom het fout is.
+- Rapporteer GEEN fouten als er geen taalfouten zijn in een kopje/hoofdstuk/paragraaf.
 
-Splits de tekst **eerst** in logische segmenten op basis van kopjes, hoofdstukken, paragrafen, genummerde onderdelen (zoals '2.1 Methoden', 'Conclusie', 'Literatuurlijst', etc.).  
-Herken je geen duidelijke kopjes? Splits de tekst dan automatisch per ongeveer 1500 woorden.
+**Structuur van de feedback:**
 
-Voor elk segment:
-- Geef het kopje/hoofdstuk (of schrijf 'niet gevonden' als het ontbreekt)
-- Rapporteer daarna **alleen echte taalfouten of grammaticale/spelfouten** (géén stijlverbeteringen):
-  - De originele zin met fout
-  - De verbeterde zin
-  - Korte uitleg (max 1 zin) waarom het fout is
+# Beoordeling schrijfkwaliteit
 
-**Structuur van de feedback per segment:**
+# Fouten per hoofdstuk en paragraaf
 
-# Segment: [naam kopje of 'niet gevonden']
-
+Hoofdstuk/Kopje: [exact of 'niet gevonden']
 - Originele zin: ...
 - Verbeterde zin: ...
 - Uitleg: ...
 
-(herhaal per gevonden fout, sla segmenten zonder fouten over)
+(herhaal dit voor elke gevonden fout)
 
 Hier is de tekst:
 \"\"\"
@@ -45,7 +41,34 @@ Hier is de tekst:
 \"\"\"
 """
 
-# ----------- TEXT EXTRACTIE ---------------
+def prompt_alleen_fouten(tekst):
+    return f"""
+Je bent een ervaren HBO-taal- en scriptiebeoordelaar.
+
+- Rapporteer **alleen echte taalfouten of grammaticale/spelfouten**, géén stijlverbeteringen.
+- Voor iedere fout:
+  - Noteer het hoofdstuk/kopje zoals dat letterlijk in de tekst staat, of schrijf 'niet gevonden' als het ontbreekt.
+  - Noem de originele zin met fout.
+  - Geef de verbeterde zin.
+  - Korte uitleg (max 1 zin) waarom het fout is.
+- Rapporteer GEEN fouten als er geen taalfouten zijn in een kopje/hoofdstuk/paragraaf.
+
+**Structuur van de feedback:**
+
+# Fouten per hoofdstuk en paragraaf
+
+Hoofdstuk/Kopje: [exact of 'niet gevonden']
+- Originele zin: ...
+- Verbeterde zin: ...
+- Uitleg: ...
+
+(herhaal dit voor elke gevonden fout)
+
+Hier is de tekst:
+\"\"\"
+{tekst}
+\"\"\"
+"""
 
 def extract_text_from_docx(file):
     doc = docx.Document(file)
@@ -60,45 +83,82 @@ def extract_text_from_pdf(file):
                 text += page_text + "\n\n"
     return text
 
-# ----------- WORD-GENERATOR ---------------
+def split_text_into_chunks(text, max_words=2000, overlap_words=100):
+    words = text.split()
+    num_chunks = math.ceil(len(words) / max_words)
+    chunks = []
+    for i in range(num_chunks):
+        start = max(0, i * max_words - i * overlap_words)
+        end = min(len(words), (i+1) * max_words)
+        chunk_words = words[start:end]
+        chunks.append(" ".join(chunk_words))
+    return chunks
 
-def maak_feedback_docx(samenvatting, segment_feedback):
+def maak_feedback_docx(totaal_beoordeling, all_fouten):
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
     doc = docx.Document()
+    # Arial standaard
+    style = doc.styles['Normal']
+    font = style.font
+    font.name = 'Arial'
+    font.size = docx.shared.Pt(11)
+
+    # Titel
     doc.add_heading("AI Feedback – Schrijfkwaliteit & Taalcontrole", 0)
 
-    # Eerst beoordeling schrijfkwaliteit en rode draad
-    doc.add_heading("Beoordeling schrijfkwaliteit en rode draad", level=1)
-    for line in samenvatting.split('\n'):
-        if line.strip():
-            doc.add_paragraph(line.strip())
-
-    # Daarna taalfouten per segment
-    doc.add_heading("Taalfouten per hoofdstuk/paragraaf", level=1)
-    lines = segment_feedback.split('\n')
-    for line in lines:
+    # Beoordeling vooraan
+    h1 = doc.add_heading("Beoordeling schrijfkwaliteit", level=1)
+    h1.alignment = 0
+    for line in totaal_beoordeling.split('\n'):
         line = line.strip()
-        if not line:
+        if not line or line.startswith("#"):
             continue
-        if line.lower().startswith("# segment"):
-            doc.add_heading(line.replace("# Segment:", "").strip(), level=2)
-        elif line.startswith("- Originele zin:"):
-            doc.add_paragraph(line, style="List Bullet")
-        elif line.startswith("- Verbeterde zin:"):
-            doc.add_paragraph(line, style="List Bullet")
-        elif line.startswith("- Uitleg:"):
-            doc.add_paragraph(line, style="List Bullet")
-        else:
-            doc.add_paragraph(line)
+        p = doc.add_paragraph(line)
+        p.style.font.name = 'Arial'
+        p.style.font.size = docx.shared.Pt(11)
+
+    # Fouten per hoofdstuk/paragraaf
+    h2 = doc.add_heading("Fouten per hoofdstuk en paragraaf", level=1)
+    h2.alignment = 0
+    for fouten in all_fouten:
+        current_kopje = None
+        for line in fouten.split('\n'):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.lower().startswith("hoofdstuk") or line.lower().startswith("kopje"):
+                kopje_naam = line.split(":", 1)[1].strip() if ":" in line else line.strip()
+                current_kopje = kopje_naam
+                h_kopje = doc.add_heading(f"Hoofdstuk/Kopje: {kopje_naam}", level=2)
+                h_kopje.alignment = 0
+            elif line.startswith("- Originele zin:"):
+                p = doc.add_paragraph(line, style="List Bullet")
+                p.style.font.name = 'Arial'
+            elif line.startswith("- Verbeterde zin:"):
+                p = doc.add_paragraph(line, style="List Bullet")
+                p.style.font.name = 'Arial'
+            elif line.startswith("- Uitleg:"):
+                p = doc.add_paragraph(line, style="List Bullet")
+                p.style.font.name = 'Arial'
+            else:
+                p = doc.add_paragraph(line)
+                p.style.font.name = 'Arial'
+        doc.add_paragraph("")  # witregel tussen segmenten
     doc.save(temp.name)
     return temp.name
 
-# ----------- STREAMLIT INTERFACE ---------------
-
-st.title("Verslagcoach – Schrijfkwaliteit & Taalfouten per Hoofdstuk")
-st.write("Upload je verslag (.docx of .pdf). Je ontvangt een Word-bestand met een totale beoordeling van schrijfkwaliteit en rode draad, gevolgd door taalfouten per hoofdstuk/paragraaf.")
+st.title("Verslagcoach – Kwaliteitsbeoordeling & Taalcontrole")
+st.write("Upload je verslag (.docx of .pdf). Je ontvangt een Word-bestand in Arial met een beoordeling van het schrijfwerk (géén samenvatting!) en fouten per hoofdstuk/paragraaf, inclusief kopjes waar mogelijk.")
 
 email = st.text_input("Vul je e-mailadres in (optioneel):")
+type_check = st.selectbox(
+    "Hoeveel woorden heeft je verslag?",
+    [
+        "Minder dan 5.000 woorden",
+        "Tussen 5.000 en 10.000 woorden",
+        "Meer dan 10.000 woorden"
+    ]
+)
 file = st.file_uploader("Upload je verslag (.docx of .pdf)", type=["docx", "pdf"])
 
 if st.button("Verzenden"):
@@ -121,42 +181,48 @@ if st.button("Verzenden"):
             if not verslag_tekst or len(verslag_tekst.strip()) < 50:
                 st.error("Kon geen bruikbare tekst vinden in het bestand. Probeer een ander document.")
             else:
-                try:
-                    # Eerst beoordeling (max 4000 woorden voor veiligheid)
-                    st.info("AI voert globale beoordeling uit...")
-                    samenvatting_resp = openai.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[
-                            {"role": "user", "content": prompt_samenvatting(verslag_tekst[:4000])}
-                        ],
-                        temperature=0.2,
-                    )
-                    samenvatting = samenvatting_resp.choices[0].message.content
-
-                    # Daarna per segment taalfouten
-                    st.info("AI voert segmentatie en taalfoutcontrole uit...")
-                    segment_resp = openai.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[
-                            {"role": "user", "content": prompt_segmentatie_taalcontrole(verslag_tekst[:12000])}
-                        ],
-                        temperature=0.2,
-                    )
-                    segment_feedback = segment_resp.choices[0].message.content
-
-                    docx_path = maak_feedback_docx(samenvatting, segment_feedback)
-                    with open(docx_path, "rb") as f:
-                        st.success("Download hieronder je AI-feedback als Word-bestand:")
-                        st.download_button(
-                            label="Download feedback (.docx)",
-                            data=f.read(),
-                            file_name="AI-feedback-schrijftaal.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                chunks = split_text_into_chunks(verslag_tekst, max_words=2000, overlap_words=100)
+                all_fouten = []
+                totaal_beoordeling = ""
+                for i, chunk in enumerate(chunks, start=1):
+                    st.info(f"AI verwerkt deel {i} van {len(chunks)}...")
+                    if i == 1:
+                        prompt = prompt_beoordeling(chunk)
+                    else:
+                        prompt = prompt_alleen_fouten(chunk)
+                    try:
+                        response = openai.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2,
                         )
-                    os.remove(docx_path)
+                        feedback = response.choices[0].message.content
+                        if i == 1:
+                            split_idx = feedback.lower().find("# fouten per hoofdstuk")
+                            if split_idx > 0:
+                                totaal_beoordeling = feedback[:split_idx]
+                                all_fouten.append(feedback[split_idx:])
+                            else:
+                                totaal_beoordeling = feedback
+                        else:
+                            all_fouten.append(feedback)
+                    except Exception as e:
+                        st.error(f"Fout bij AI-verwerking van deel {i}: {e}")
+                        if i == 1:
+                            totaal_beoordeling = "[AI-verwerking van beoordeling mislukt]"
+                        else:
+                            all_fouten.append(f"[AI-verwerking mislukt voor deel {i}]")
 
-                    st.markdown("**Beoordeling schrijfkwaliteit:**")
-                    st.write(samenvatting[:1000] + ("..." if len(samenvatting) > 1000 else ""))
+                docx_path = maak_feedback_docx(totaal_beoordeling, all_fouten)
+                with open(docx_path, "rb") as f:
+                    st.success("Download hieronder je complete AI-feedback als Word-bestand:")
+                    st.download_button(
+                        label="Download feedback (.docx)",
+                        data=f.read(),
+                        file_name="AI-feedback-schrijftaal.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    )
+                os.remove(docx_path)
 
-                except Exception as e:
-                    st.error(f"Er ging iets mis met de AI-feedback: {e}")
+                st.markdown("**Beoordeling schrijfkwaliteit (eerste deel):**")
+                st.write(totaal_beoordeling[:1000] + ("..." if len(totaal_beoordeling) > 1000 else ""))
