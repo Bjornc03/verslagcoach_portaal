@@ -5,8 +5,72 @@ import pdfplumber
 import tempfile
 import os
 import math
+import requests
+from docx.shared import RGBColor
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
+
+# ================== ZeroGPT API FUNCTIES ==================
+
+def detect_ai_zerogpt(text, api_key):
+    url = "https://api.zerogpt.com/api/v1/detect"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Api-Key": api_key
+    }
+    data = {
+        "input_text": text,
+        "language": "auto"
+    }
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return {"error": response.text}
+
+def check_plagiarism_zerogpt(text, api_key):
+    url = "https://api.zerogpt.com/api/v1/plagiarism"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Api-Key": api_key
+    }
+    data = {
+        "input_text": text,
+        "language": "auto"
+    }
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return {"error": response.text}
+
+# =============== Tekst extractie en splitsen ===============
+
+def extract_text_from_docx(file):
+    doc = docx.Document(file)
+    return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+
+def extract_text_from_pdf(file):
+    text = ""
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n\n"
+    return text
+
+def split_text_into_chunks(text, max_words=2000, overlap_words=100):
+    words = text.split()
+    num_chunks = math.ceil(len(words) / max_words)
+    chunks = []
+    for i in range(num_chunks):
+        start = max(0, i * max_words - i * overlap_words)
+        end = min(len(words), (i+1) * max_words)
+        chunk_words = words[start:end]
+        chunks.append(" ".join(chunk_words))
+    return chunks
+
+# =========== HUIDIGE SCHRIJFSTIJL/TAALCONTROLE BLOKKEN ===========
 
 def prompt_beoordeling(tekst):
     return f"""
@@ -70,30 +134,6 @@ Hier is de tekst:
 \"\"\"
 """
 
-def extract_text_from_docx(file):
-    doc = docx.Document(file)
-    return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-
-def extract_text_from_pdf(file):
-    text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n\n"
-    return text
-
-def split_text_into_chunks(text, max_words=2000, overlap_words=100):
-    words = text.split()
-    num_chunks = math.ceil(len(words) / max_words)
-    chunks = []
-    for i in range(num_chunks):
-        start = max(0, i * max_words - i * overlap_words)
-        end = min(len(words), (i+1) * max_words)
-        chunk_words = words[start:end]
-        chunks.append(" ".join(chunk_words))
-    return chunks
-
 def maak_feedback_docx(totaal_beoordeling, all_fouten):
     temp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
     doc = docx.Document()
@@ -103,10 +143,7 @@ def maak_feedback_docx(totaal_beoordeling, all_fouten):
     font.name = 'Arial'
     font.size = docx.shared.Pt(11)
 
-    # Titel
     doc.add_heading("AI Feedback – Schrijfkwaliteit & Taalcontrole", 0)
-
-    # Beoordeling vooraan
     h1 = doc.add_heading("Beoordeling schrijfkwaliteit", level=1)
     h1.alignment = 0
     for line in totaal_beoordeling.split('\n'):
@@ -116,8 +153,6 @@ def maak_feedback_docx(totaal_beoordeling, all_fouten):
         p = doc.add_paragraph(line)
         p.style.font.name = 'Arial'
         p.style.font.size = docx.shared.Pt(11)
-
-    # Fouten per hoofdstuk/paragraaf
     h2 = doc.add_heading("Fouten per hoofdstuk en paragraaf", level=1)
     h2.alignment = 0
     for fouten in all_fouten:
@@ -147,45 +182,71 @@ def maak_feedback_docx(totaal_beoordeling, all_fouten):
     doc.save(temp.name)
     return temp.name
 
-st.title("Verslagcoach – Kwaliteitsbeoordeling & Taalcontrole")
-st.write("Upload je verslag (.docx of .pdf). Je ontvangt een Word-bestand in Arial met een beoordeling van het schrijfwerk (géén samenvatting!) en fouten per hoofdstuk/paragraaf, inclusief kopjes waar mogelijk.")
+# ============ AI- EN PLAGIAAT HIGHLIGHT WORD-BESTANDEN =============
+
+def highlight_sentences_in_docx(orig_docx_path, highlight_sentences, filename="AI-verdacht.docx", highlight_color=RGBColor(255,255,0)):
+    # highlight_sentences: lijst van string-zinnen die gemarkeerd moeten worden
+    # LET OP: Matching is op letterlijke string. Kan bij complexe/verschoven zinnen minder werken.
+    doc = docx.Document(orig_docx_path)
+    for para in doc.paragraphs:
+        for sent in highlight_sentences:
+            if sent and sent.strip() and sent.strip() in para.text:
+                inline = para.runs
+                for i in range(len(inline)):
+                    if sent.strip() in inline[i].text:
+                        # Highlight volledige run
+                        inline[i].font.highlight_color = 7  # geel (Word code 7)
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+    doc.save(temp.name)
+    return temp.name
+
+# =============== STREAMLIT INTERFACE ================
+
+st.title("Verslagcoach – Meerdere controles")
+st.write("Upload je verslag (.docx of .pdf). Kies zelf welke controles je wilt uitvoeren. Je krijgt voor elke dienst een los Word-bestand.")
+
+diensten = st.multiselect(
+    "Welke controles wil je uitvoeren?",
+    [
+        "Taalcontrole & schrijfkwaliteit",
+        "AI-detectie",
+        "Plagiaatcontrole"
+    ],
+    default=["Taalcontrole & schrijfkwaliteit"]
+)
 
 email = st.text_input("Vul je e-mailadres in (optioneel):")
-type_check = st.selectbox(
-    "Hoeveel woorden heeft je verslag?",
-    [
-        "Minder dan 5.000 woorden",
-        "Tussen 5.000 en 10.000 woorden",
-        "Meer dan 10.000 woorden"
-    ]
-)
 file = st.file_uploader("Upload je verslag (.docx of .pdf)", type=["docx", "pdf"])
 
 if st.button("Verzenden"):
     if not file:
         st.error("Upload een bestand!")
     else:
-        with st.spinner("Verslag wordt verwerkt en AI-feedback gegenereerd..."):
-            try:
-                if file.name.endswith(".docx"):
-                    verslag_tekst = extract_text_from_docx(file)
-                elif file.name.endswith(".pdf"):
-                    verslag_tekst = extract_text_from_pdf(file)
-                else:
-                    st.error("Bestandstype niet ondersteund.")
-                    verslag_tekst = ""
-            except Exception as e:
-                st.error(f"Fout bij openen bestand: {e}")
-                verslag_tekst = ""
+        # Bestand opslaan tbv highlighting
+        temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
+        if file.name.endswith(".docx"):
+            file.seek(0)
+            temp_input.write(file.read())
+            temp_input.flush()
+            verslag_tekst = extract_text_from_docx(temp_input.name)
+        elif file.name.endswith(".pdf"):
+            verslag_tekst = extract_text_from_pdf(file)
+            # Optioneel: PDF omzetten naar docx als gebruiker AI/Plagiaat wil
+        else:
+            st.error("Bestandstype niet ondersteund.")
+            verslag_tekst = ""
+        temp_input.close()
 
-            if not verslag_tekst or len(verslag_tekst.strip()) < 50:
-                st.error("Kon geen bruikbare tekst vinden in het bestand. Probeer een ander document.")
-            else:
+        if not verslag_tekst or len(verslag_tekst.strip()) < 50:
+            st.error("Kon geen bruikbare tekst vinden in het bestand. Probeer een ander document.")
+        else:
+            # ---- Taalcontrole & schrijfkwaliteit ----
+            if "Taalcontrole & schrijfkwaliteit" in diensten:
+                st.info("Taalcontrole wordt uitgevoerd...")
                 chunks = split_text_into_chunks(verslag_tekst, max_words=2000, overlap_words=100)
                 all_fouten = []
                 totaal_beoordeling = ""
                 for i, chunk in enumerate(chunks, start=1):
-                    st.info(f"AI verwerkt deel {i} van {len(chunks)}...")
                     if i == 1:
                         prompt = prompt_beoordeling(chunk)
                     else:
@@ -215,14 +276,68 @@ if st.button("Verzenden"):
 
                 docx_path = maak_feedback_docx(totaal_beoordeling, all_fouten)
                 with open(docx_path, "rb") as f:
-                    st.success("Download hieronder je complete AI-feedback als Word-bestand:")
+                    st.success("Download hieronder je AI-feedback als Word-bestand (taalcontrole):")
                     st.download_button(
-                        label="Download feedback (.docx)",
+                        label="Download taalcontrole (.docx)",
                         data=f.read(),
                         file_name="AI-feedback-schrijftaal.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     )
                 os.remove(docx_path)
 
-                st.markdown("**Beoordeling schrijfkwaliteit (eerste deel):**")
-                st.write(totaal_beoordeling[:1000] + ("..." if len(totaal_beoordeling) > 1000 else ""))
+            # ---- AI-DETECTIE ----
+            if "AI-detectie" in diensten:
+                st.info("AI-detectie wordt uitgevoerd...")
+                try:
+                    zgt_api_key = st.secrets["ZEROGPT_API_KEY"]
+                    ai_result = detect_ai_zerogpt(verslag_tekst[:10000], zgt_api_key)  # ZeroGPT limiet!
+                    # NB: 'details' bevat meestal lijst van verdachte zinnen in 'ai_sentences'
+                    ai_sentences = []
+                    if "ai_sentences" in ai_result:
+                        ai_sentences = ai_result["ai_sentences"]
+                    elif "details" in ai_result and isinstance(ai_result["details"], dict) and "ai_sentences" in ai_result["details"]:
+                        ai_sentences = ai_result["details"]["ai_sentences"]
+                    if not ai_sentences:
+                        st.warning("Geen AI-zinnen gemarkeerd door ZeroGPT.")
+                    docx_highlighted = highlight_sentences_in_docx(temp_input.name, ai_sentences, filename="AI-verdacht.docx")
+                    with open(docx_highlighted, "rb") as f:
+                        st.success("Download hieronder het Word-bestand met AI-verdachte tekst geel gemarkeerd:")
+                        st.download_button(
+                            label="Download AI-detectie (.docx)",
+                            data=f.read(),
+                            file_name="AI-detectie-rapport.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
+                    os.remove(docx_highlighted)
+                except Exception as e:
+                    st.error(f"Fout bij ZeroGPT AI-detectie: {e}")
+
+            # ---- PLAGIAAT ----
+            if "Plagiaatcontrole" in diensten:
+                st.info("Plagiaatcontrole wordt uitgevoerd...")
+                try:
+                    zgt_api_key = st.secrets["ZEROGPT_API_KEY"]
+                    pl_result = check_plagiarism_zerogpt(verslag_tekst[:10000], zgt_api_key)
+                    plag_sentences = []
+                    if "plagiarized_sentences" in pl_result:
+                        plag_sentences = pl_result["plagiarized_sentences"]
+                    elif "details" in pl_result and isinstance(pl_result["details"], dict) and "plagiarized_sentences" in pl_result["details"]:
+                        plag_sentences = pl_result["details"]["plagiarized_sentences"]
+                    if not plag_sentences:
+                        st.warning("Geen plagiaatzinnen gemarkeerd door ZeroGPT.")
+                    docx_highlighted = highlight_sentences_in_docx(temp_input.name, plag_sentences, filename="Plagiaat-verdacht.docx")
+                    with open(docx_highlighted, "rb") as f:
+                        st.success("Download hieronder het Word-bestand met plagiaat-verdachte tekst geel gemarkeerd:")
+                        st.download_button(
+                            label="Download plagiaatrapport (.docx)",
+                            data=f.read(),
+                            file_name="Plagiaatcontrole-rapport.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        )
+                    os.remove(docx_highlighted)
+                except Exception as e:
+                    st.error(f"Fout bij ZeroGPT plagiaatcontrole: {e}")
+
+        # Opruimen
+        if os.path.exists(temp_input.name):
+            os.remove(temp_input.name)
