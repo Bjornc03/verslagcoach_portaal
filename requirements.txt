@@ -2,4 +2,4 @@ streamlit
 openai
 python-docx
 pdfplumber
-python-docx
+requests
