@@ -41,8 +41,6 @@ def check_plagiarism_zerogpt_v2(text, api_key):
     response = requests.post(url, headers=headers, json=data)
     return response.status_code, response.json()
 
-# ========== Tekst extractie en splitsen ===========
-
 def extract_text_from_docx(file):
     doc = docx.Document(file)
     return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
@@ -66,8 +64,6 @@ def split_text_into_chunks(text, max_words=2000, overlap_words=100):
         chunk_words = words[start:end]
         chunks.append(" ".join(chunk_words))
     return chunks
-
-# ========== Taalcontrole / Schrijfstijl-blokken ===========
 
 def prompt_beoordeling(tekst):
     return f"""
@@ -131,7 +127,6 @@ Hier is de tekst:
 \"\"\"
 """
 
-# ======= Highlight-functie (fuzzy) =======
 def fuzzy_highlight_docx(orig_docx_path, highlight_sentences, highlight_color=7):
     doc = docx.Document(orig_docx_path)
     sentences_left = set(highlight_sentences)
@@ -152,7 +147,6 @@ def fuzzy_highlight_docx(orig_docx_path, highlight_sentences, highlight_color=7)
     doc.save(temp.name)
     return temp.name, not_found
 
-# ======= Rapport-generatie: alles-in-één =======
 def maak_gecombineerd_word(
         totaal_beoordeling,
         all_fouten,
@@ -171,7 +165,6 @@ def maak_gecombineerd_word(
     font.size = docx.shared.Pt(11)
     doc.add_heading("AI Feedback – Volledig Rapport", 0)
 
-    # ---- Taalcontrole ----
     if totaal_beoordeling or all_fouten:
         doc.add_heading("Taalcontrole & schrijfkwaliteit", level=1)
         disclaimer = ("Deze controle richt zich op grammatica, spelling en schrijfstijl. "
@@ -206,7 +199,6 @@ def maak_gecombineerd_word(
                         doc.add_paragraph(line)
                 doc.add_paragraph("")
 
-    # ---- AI-Detectie ----
     if ai_result is not None:
         doc.add_page_break()
         doc.add_heading("AI-detectie (ZeroGPT)", level=1)
@@ -236,7 +228,6 @@ def maak_gecombineerd_word(
             for nf in ai_not_found:
                 doc.add_paragraph(nf)
 
-    # ---- Plagiaatcontrole ----
     if plag_result is not None:
         doc.add_page_break()
         doc.add_heading("Plagiaatcontrole (ZeroGPT)", level=1)
@@ -266,8 +257,6 @@ def maak_gecombineerd_word(
                 doc.add_paragraph(nf)
     doc.save(temp.name)
     return temp.name
-
-# =============== STREAMLIT INTERFACE ================
 
 st.title("Verslagcoach – Alles-in-één Controle (ZeroGPT Business)")
 st.write("Upload je verslag (.docx of .pdf), kies gewenste controles en ontvang één gecombineerd, professioneel Word-rapport (in Arial) met taalfouten, AI- en/of plagiaatmarkering en heldere samenvattingen.")
@@ -346,13 +335,13 @@ if st.button("Verzenden"):
                         else:
                             all_fouten.append(f"[AI-verwerking mislukt voor deel {i}]")
 
-            # ---- AI-DETECTIE ----
+            # ---- AI-DETECTIE (DEBUG!) ----
             if "AI-detectie" in diensten:
                 st.info("AI-detectie wordt uitgevoerd...")
                 try:
                     zgt_api_key = st.secrets["ZEROGPT_API_KEY"]
                     status, ai_resp = detect_ai_zerogpt_v2(verslag_tekst[:400000], zgt_api_key)
-                    st.write("ZeroGPT AI detectie response:", ai_resp)  # DEBUG
+                    st.write("ZeroGPT AI detectie response:", ai_resp)  # <<< DEBUG!
                     if status == 200 and ai_resp.get("ai_sentences"):
                         ai_result = ai_resp
                         ai_sentences = ai_resp["ai_sentences"]
@@ -365,13 +354,13 @@ if st.button("Verzenden"):
                 except Exception as e:
                     st.error(f"Fout bij ZeroGPT AI-detectie: {e}")
 
-            # ---- PLAGIAAT ----
+            # ---- PLAGIAAT (DEBUG!) ----
             if "Plagiaatcontrole" in diensten:
                 st.info("Plagiaatcontrole wordt uitgevoerd...")
                 try:
                     zgt_api_key = st.secrets["ZEROGPT_API_KEY"]
                     status, plag_resp = check_plagiarism_zerogpt_v2(verslag_tekst[:400000], zgt_api_key)
-                    st.write("ZeroGPT plagiaat response:", plag_resp)  # DEBUG
+                    st.write("ZeroGPT plagiaat response:", plag_resp)  # <<< DEBUG!
                     if status == 200 and plag_resp.get("plagiarized_sentences"):
                         plag_result = plag_resp
                         plag_sentences = plag_resp["plagiarized_sentences"]
