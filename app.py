@@ -5,8 +5,24 @@ import pdfplumber
 import tempfile
 import os
 import math
+import requests
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
+
+# Functie om het rapport via Make-webhook te mailen
+def stuur_mail_make_webhook(webhook_url, email, file_path):
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+    files = {
+        'file': (
+            'AI-feedback-schrijftaal.docx',
+            file_content,
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        )
+    }
+    data = {'email': email}
+    response = requests.post(webhook_url, data=data, files=files)
+    return response.status_code, response.text
 
 def extract_text_from_docx(file):
     doc = docx.Document(file)
@@ -205,4 +221,14 @@ if st.button("Verzenden"):
                     file_name="AI-feedback-schrijftaal.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
+
+            # Automatisch mailen als e-mailadres is ingevuld
+            if email and len(email) > 5:
+                webhook_url = "https://hook.eu2.make.com/q5yuw6u91lttvulnj1vdg8m0csyibkcy"
+                status, resp = stuur_mail_make_webhook(webhook_url, email, docx_path)
+                if status == 200:
+                    st.success("E-mail is verzonden via Make!")
+                else:
+                    st.warning(f"E-mail via Make is niet gelukt: {resp}")
+
             os.remove(docx_path)
