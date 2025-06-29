@@ -1,5 +1,5 @@
 import streamlit as st
-from openai import OpenAI
+import openai
 import tempfile
 import os
 import docx
@@ -7,8 +7,7 @@ import fitz  # PyMuPDF
 import win32com.client as win32
 from docx import Document
 
-# OpenAI-client initialiseren
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 def extract_text(file):
     ext = file.name.split('.')[-1].lower()
@@ -43,69 +42,41 @@ def extract_text_from_docx(file):
 
 def generate_feedback(text, onderwerp, niveau):
     prompt = f"""
-<verslagcoach>
-  <instellingen>
-    <taal>Nederlands</taal>
-    <stijl>Professioneel, helder, concreet</stijl>
-    <niveau>{niveau}</niveau>
-  </instellingen>
-  
-  <verslag>
-    <onderwerp>{onderwerp}</onderwerp>
-    <tekst>
-{text}
-    </tekst>
-  </verslag>
-  
-  <feedbackverzoek>
-    <structuur>ja</structuur>
-    <inhoudelijke_diepte>ja</inhoudelijke_diepte>
-    <logica_argumentatie>ja</logica_argumentatie>
-    <taalgebruik>ja</taalgebruik>
-    <bronvermelding_APA>ja</bronvermelding_APA>
-  </feedbackverzoek>
-</verslagcoach>
-    """
+Je bent een professionele verslagcoach. Geef inhoudelijke feedback op het onderstaande verslag. 
 
-    response = client.chat.completions.create(
+<verslaginformatie>
+  <onderwerp>{onderwerp}</onderwerp>
+  <niveau>{niveau}</niveau>
+</verslaginformatie>
+
+Beoordeel de volgende onderdelen:
+- Structuur en opbouw
+- Inhoudelijke diepgang passend bij {niveau}
+- Logica en argumentatie
+- Taalgebruik en grammaticale correctheid
+- Bronvermelding en APA-stijl (indien van toepassing)
+
+Gebruik een professionele, duidelijke schrijfstijl. Geef de feedback puntsgewijs en waar mogelijk met concrete voorbeelden.
+
+Verslagtekst:
+{text}
+"""
+    response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "Je bent een ervaren verslagcoach die gestructureerde, professionele feedback geeft."},
+            {"role": "system", "content": "Je bent een ervaren verslagcoach."},
             {"role": "user", "content": prompt}
         ],
         temperature=0.7,
         max_tokens=2000
     )
+    return response["choices"][0]["message"]["content"]
 
-    return response.choices[0].message.content
-
-def genereer_gesplitste_feedback(tekst, onderwerp, niveau):
-    woorden = tekst.split()
-    blokgrootte = 4000  # veilige marge onder 8192 tokens
-    feedbacks = []
-
-    for i in range(0, len(woorden), blokgrootte):
-        deel = " ".join(woorden[i:i + blokgrootte])
-        deelnummer = i // blokgrootte + 1
-        st.info(f"🔍 Deel {deelnummer} wordt verwerkt...")
-        try:
-            deel_feedback = generate_feedback(deel, onderwerp, niveau)
-            feedbacks.append((deelnummer, deel_feedback))
-        except Exception as e:
-            st.error(f"❌ Fout bij deel {deelnummer}: {e}")
-
-    return feedbacks
-
-def save_feedback_as_docx(feedback_delen, student_name):
+def save_feedback_as_docx(feedback_text, student_name):
     doc = Document()
     doc.add_heading(f"Verslagfeedback – {student_name}", level=1)
-
-    for deelnummer, feedback_text in feedback_delen:
-        doc.add_heading(f"📑 Feedback Deel {deelnummer}", level=2)
-        for line in feedback_text.split("\n"):
-            if line.strip():
-                doc.add_paragraph(line.strip())
-
+    for line in feedback_text.split("\n"):
+        doc.add_paragraph(line)
     temp_path = tempfile.mktemp(suffix=".docx")
     doc.save(temp_path)
     return temp_path
@@ -120,9 +91,8 @@ def send_email_with_feedback(email, naam, feedback_path):
     mail.Send()
 
 # --- Streamlit interface ---
-st.set_page_config(page_title="Verslagcoach", page_icon="📝")
-st.title("📄 Verslagcoach – Uploadportaal")
-st.write("Upload hier je verslag en ontvang gestructureerde feedback per e-mail.")
+st.title("Verslagcoach Uploadportaal")
+st.write("Upload hier je verslag en ontvang gerichte feedback per e-mail.")
 
 with st.form("upload_form"):
     naam = st.text_input("Je naam")
@@ -134,18 +104,14 @@ with st.form("upload_form"):
 
 if submitted:
     if not all([naam, email, onderwerp, niveau, file]):
-        st.warning("❗ Vul alle velden in en upload een bestand.")
+        st.warning("Vul alle velden in en upload een bestand.")
     else:
-        with st.spinner("📤 Bestand verwerken..."):
+        with st.spinner("Bezig met verwerken..."):
             verslagtekst = extract_text(file)
-            if not verslagtekst or verslagtekst.strip() == "":
-                st.error("⚠️ Er kon geen tekst uit het bestand worden gehaald. Controleer of het verslag niet leeg is.")
+            if not verslagtekst:
+                st.error("Kon geen tekst extraheren uit het bestand.")
             else:
-                feedback_delen = genereer_gesplitste_feedback(verslagtekst, onderwerp, niveau)
-                if feedback_delen:
-                    feedback_path = save_feedback_as_docx(feedback_delen, naam)
-                    try:
-                        send_email_with_feedback(email, naam, feedback_path)
-                        st.success("✅ Feedback is verstuurd naar je e-mailadres.")
-                    except Exception as e:
-                        st.error(f"📧 Fout bij verzenden van e-mail: {e}")
+                feedback = generate_feedback(verslagtekst, onderwerp, niveau)
+                feedback_path = save_feedback_as_docx(feedback, naam)
+                send_email_with_feedback(email, naam, feedback_path)
+                st.success("Feedback is verstuurd naar je e-mailadres.")
