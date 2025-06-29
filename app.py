@@ -79,11 +79,33 @@ def generate_feedback(text, onderwerp, niveau):
 
     return response.choices[0].message.content
 
-def save_feedback_as_docx(feedback_text, student_name):
+def genereer_gesplitste_feedback(tekst, onderwerp, niveau):
+    woorden = tekst.split()
+    blokgrootte = 6000
+    feedbacks = []
+
+    for i in range(0, len(woorden), blokgrootte):
+        deel = " ".join(woorden[i:i + blokgrootte])
+        deelnummer = i // blokgrootte + 1
+        st.info(f"🔍 Deel {deelnummer} wordt verwerkt...")
+        try:
+            deel_feedback = generate_feedback(deel, onderwerp, niveau)
+            feedbacks.append((deelnummer, deel_feedback))
+        except Exception as e:
+            st.error(f"❌ Fout bij deel {deelnummer}: {e}")
+
+    return feedbacks
+
+def save_feedback_as_docx(feedback_delen, student_name):
     doc = Document()
     doc.add_heading(f"Verslagfeedback – {student_name}", level=1)
-    for line in feedback_text.split("\n"):
-        doc.add_paragraph(line)
+
+    for deelnummer, feedback_text in feedback_delen:
+        doc.add_heading(f"📑 Feedback Deel {deelnummer}", level=2)
+        for line in feedback_text.split("\n"):
+            if line.strip():
+                doc.add_paragraph(line.strip())
+
     temp_path = tempfile.mktemp(suffix=".docx")
     doc.save(temp_path)
     return temp_path
@@ -112,17 +134,17 @@ with st.form("upload_form"):
 
 if submitted:
     if not all([naam, email, onderwerp, niveau, file]):
-        st.warning("Vul alle velden in en upload een bestand.")
+        st.warning("❗ Vul alle velden in en upload een bestand.")
     else:
-        with st.spinner("Bezig met verwerken..."):
+        with st.spinner("📤 Bestand verwerken..."):
             verslagtekst = extract_text(file)
             if not verslagtekst or verslagtekst.strip() == "":
-                st.error("Er kon geen tekst uit het bestand worden gehaald. Controleer of het verslag niet leeg is.")
+                st.error("⚠️ Er kon geen tekst uit het bestand worden gehaald. Controleer of het verslag niet leeg is.")
             else:
-                feedback = generate_feedback(verslagtekst, onderwerp, niveau)
-                feedback_path = save_feedback_as_docx(feedback, naam)
+                feedback_delen = genereer_gesplitste_feedback(verslagtekst, onderwerp, niveau)
+                feedback_path = save_feedback_as_docx(feedback_delen, naam)
                 try:
                     send_email_with_feedback(email, naam, feedback_path)
                     st.success("✅ Feedback is verstuurd naar je e-mailadres.")
                 except Exception as e:
-                    st.error(f"Er ging iets mis bij het verzenden van de e-mail: {e}")
+                    st.error(f"📧 Fout bij verzenden van e-mail: {e}")
