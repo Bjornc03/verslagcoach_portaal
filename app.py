@@ -1,5 +1,5 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 import tempfile
 import os
 import docx
@@ -7,8 +7,8 @@ import fitz  # PyMuPDF
 import win32com.client as win32
 from docx import Document
 
-# Zet hier je OpenAI API key óf gebruik secrets
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# OpenAI-client initialiseren
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 def extract_text(file):
     ext = file.name.split('.')[-1].lower()
@@ -67,7 +67,7 @@ def generate_feedback(text, onderwerp, niveau):
 </verslagcoach>
     """
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[
             {"role": "system", "content": "Je bent een ervaren verslagcoach die gestructureerde, professionele feedback geeft."},
@@ -77,7 +77,7 @@ def generate_feedback(text, onderwerp, niveau):
         max_tokens=2000
     )
 
-    return response["choices"][0]["message"]["content"]
+    return response.choices[0].message.content
 
 def save_feedback_as_docx(feedback_text, student_name):
     doc = Document()
