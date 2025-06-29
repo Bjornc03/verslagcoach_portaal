@@ -81,7 +81,7 @@ def generate_feedback(text, onderwerp, niveau):
 
 def genereer_gesplitste_feedback(tekst, onderwerp, niveau):
     woorden = tekst.split()
-    blokgrootte = 6000
+    blokgrootte = 4000  # veilige marge onder 8192 tokens
     feedbacks = []
 
     for i in range(0, len(woorden), blokgrootte):
@@ -142,9 +142,10 @@ if submitted:
                 st.error("⚠️ Er kon geen tekst uit het bestand worden gehaald. Controleer of het verslag niet leeg is.")
             else:
                 feedback_delen = genereer_gesplitste_feedback(verslagtekst, onderwerp, niveau)
-                feedback_path = save_feedback_as_docx(feedback_delen, naam)
-                try:
-                    send_email_with_feedback(email, naam, feedback_path)
-                    st.success("✅ Feedback is verstuurd naar je e-mailadres.")
-                except Exception as e:
-                    st.error(f"📧 Fout bij verzenden van e-mail: {e}")
+                if feedback_delen:
+                    feedback_path = save_feedback_as_docx(feedback_delen, naam)
+                    try:
+                        send_email_with_feedback(email, naam, feedback_path)
+                        st.success("✅ Feedback is verstuurd naar je e-mailadres.")
+                    except Exception as e:
+                        st.error(f"📧 Fout bij verzenden van e-mail: {e}")
