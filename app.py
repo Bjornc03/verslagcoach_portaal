@@ -1,57 +1,128 @@
 import streamlit as st
-import docx
-import requests
+import openai
 import tempfile
 import os
+import docx
+import fitz  # PyMuPDF
+import win32com.client as win32
+from docx import Document
 
-ZEROGPT_API_KEY = st.secrets["ZEROGPT_API_KEY"]
+# Zet hier je OpenAI API key óf gebruik secrets
+openai.api_key = st.secrets["OPENAI_API_KEY"]
+
+def extract_text(file):
+    ext = file.name.split('.')[-1].lower()
+    if ext == "pdf":
+        return extract_text_from_pdf(file)
+    elif ext == "docx":
+        return extract_text_from_docx(file)
+    else:
+        return None
+
+def extract_text_from_pdf(file):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(file.read())
+        tmp_path = tmp.name
+
+    text = ""
+    with fitz.open(tmp_path) as doc:
+        for page in doc:
+            text += page.get_text()
+    os.remove(tmp_path)
+    return text
 
 def extract_text_from_docx(file):
-    doc = docx.Document(file)
-    return "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+        tmp.write(file.read())
+        tmp_path = tmp.name
 
-def detect_ai_zerogpt(text, api_key):
-    url = "https://api.zerogpt.com/api/v2/detect/text"
-    payload = {
-        "input_text": text,
-        "language": "auto"
-    }
-    headers = {
-        "accept": "application/json",
-        "X-Api-Key": api_key,
-        "Content-Type": "application/json"
-    }
-    response = requests.post(url, json=payload, headers=headers)
-    return response.status_code, response.json()
+    doc = Document(tmp_path)
+    text = "\n".join([para.text for para in doc.paragraphs])
+    os.remove(tmp_path)
+    return text
 
-st.title("ZeroGPT AI-detectie (officiële API, 2024)")
-file = st.file_uploader("Upload een .docx-bestand", type=["docx"])
+def generate_feedback(text, onderwerp, niveau):
+    prompt = f"""
+<verslagcoach>
+  <instellingen>
+    <taal>Nederlands</taal>
+    <stijl>Professioneel, helder, concreet</stijl>
+    <niveau>{niveau}</niveau>
+  </instellingen>
+  
+  <verslag>
+    <onderwerp>{onderwerp}</onderwerp>
+    <tekst>
+{text}
+    </tekst>
+  </verslag>
+  
+  <feedbackverzoek>
+    <structuur>ja</structuur>
+    <inhoudelijke_diepte>ja</inhoudelijke_diepte>
+    <logica_argumentatie>ja</logica_argumentatie>
+    <taalgebruik>ja</taalgebruik>
+    <bronvermelding_APA>ja</bronvermelding_APA>
+  </feedbackverzoek>
+</verslagcoach>
+    """
 
-if st.button("Start AI-detectie"):
-    if not file:
-        st.error("Upload eerst een .docx-bestand!")
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "Je bent een ervaren verslagcoach die gestructureerde, professionele feedback geeft."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.7,
+        max_tokens=2000
+    )
+
+    return response["choices"][0]["message"]["content"]
+
+def save_feedback_as_docx(feedback_text, student_name):
+    doc = Document()
+    doc.add_heading(f"Verslagfeedback – {student_name}", level=1)
+    for line in feedback_text.split("\n"):
+        doc.add_paragraph(line)
+    temp_path = tempfile.mktemp(suffix=".docx")
+    doc.save(temp_path)
+    return temp_path
+
+def send_email_with_feedback(email, naam, feedback_path):
+    outlook = win32.Dispatch("Outlook.Application")
+    mail = outlook.CreateItem(0)
+    mail.To = email
+    mail.Subject = "Feedback op je verslag"
+    mail.Body = f"Beste {naam},\n\nIn de bijlage vind je de feedback op je verslag.\n\nMet vriendelijke groet,\nVerslagcoach AI"
+    mail.Attachments.Add(feedback_path)
+    mail.Send()
+
+# --- Streamlit interface ---
+st.set_page_config(page_title="Verslagcoach", page_icon="📝")
+st.title("📄 Verslagcoach – Uploadportaal")
+st.write("Upload hier je verslag en ontvang gestructureerde feedback per e-mail.")
+
+with st.form("upload_form"):
+    naam = st.text_input("Je naam")
+    email = st.text_input("Je e-mailadres")
+    onderwerp = st.text_input("Waar gaat je verslag over?")
+    niveau = st.selectbox("Opleidingsniveau", ["MBO", "HBO", "Universitair"])
+    file = st.file_uploader("Upload je verslag (.docx of .pdf)", type=["docx", "pdf"])
+    submitted = st.form_submit_button("Verstuur")
+
+if submitted:
+    if not all([naam, email, onderwerp, niveau, file]):
+        st.warning("Vul alle velden in en upload een bestand.")
     else:
-        temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=".docx")
-        file.seek(0)
-        temp_input.write(file.read())
-        temp_input.flush()
-        verslag_tekst = extract_text_from_docx(temp_input.name)
-        temp_input.close()
-
-        st.info("AI-detectie uitvoeren via ZeroGPT...")
-        status, result = detect_ai_zerogpt(verslag_tekst[:40000], ZEROGPT_API_KEY)
-        st.write("ZeroGPT API response:", result)  # Debug-output
-
-        if status == 200:
-            st.success("Detectie gelukt!")
-            st.markdown(f"**AI Percentage:** {result.get('ai_probability', 'onbekend')}%")
-            st.markdown(f"**Resultaat:** {result.get('result', 'onbekend')}")
-            st.markdown(f"**AI Verdict:** {result.get('verdict', 'onbekend')}")
-            if result.get("ai_sentences"):
-                st.markdown(f"**Aantal verdachte zinnen:** {len(result['ai_sentences'])}")
-                st.write("Verdachte zinnen:", result["ai_sentences"])
+        with st.spinner("Bezig met verwerken..."):
+            verslagtekst = extract_text(file)
+            if not verslagtekst or verslagtekst.strip() == "":
+                st.error("Er kon geen tekst uit het bestand worden gehaald. Controleer of het verslag niet leeg is.")
             else:
-                st.info("Geen verdachte zinnen gevonden.")
-        else:
-            st.error(f"Fout bij ZeroGPT: {result}")
-        os.remove(temp_input.name)
+                feedback = generate_feedback(verslagtekst, onderwerp, niveau)
+                feedback_path = save_feedback_as_docx(feedback, naam)
+                try:
+                    send_email_with_feedback(email, naam, feedback_path)
+                    st.success("✅ Feedback is verstuurd naar je e-mailadres.")
+                except Exception as e:
+                    st.error(f"Er ging iets mis bij het verzenden van de e-mail: {e}")
